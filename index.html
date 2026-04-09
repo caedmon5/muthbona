@@ -1101,9 +1101,10 @@ function drawHUD(){
   hudLeft.textContent='W\u00E6lfyll: '+score;
   hudCenter.textContent=isMotherLevel()?'Fitt: II (M\u014Ddor)':'Fitt: I (Grendel)';
   // Arms display
+  const armWord=arms===2?'tw\u0101':arms===1?'\u0101n':'n\u0101n!';
   let armStr='Earmas: ';
-  for(let i=0;i<arms;i++) armStr+='\u1405 '; // arm-like symbol
-  if(arms===0) armStr+='(n\u0101n!)';
+  for(let i=0;i<arms;i++) armStr+='\u1405 ';
+  armStr+=' ('+armWord+')';
   hudRight.textContent=armStr;
   messageBar.textContent=msgTimer>0?msgText:'';
 }
