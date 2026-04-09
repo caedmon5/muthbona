@@ -1,0 +1,1386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Grendles Muðbona</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #0a0a0a;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 100vh;
+  font-family: Georgia, 'Times New Roman', serif;
+  color: #d4a017;
+  overflow: hidden;
+}
+#gameContainer {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+#hud {
+  display: flex;
+  justify-content: space-between;
+  width: 100%;
+  padding: 8px 16px;
+  font-size: 18px;
+  letter-spacing: 1px;
+  text-shadow: 0 0 8px rgba(212,160,23,0.5);
+}
+#hud span { min-width: 100px; }
+#hudLeft { text-align: left; }
+#hudCenter { text-align: center; }
+#hudRight { text-align: right; }
+canvas { display: block; border: 2px solid #3a2a0a; box-shadow: 0 0 30px rgba(20,80,20,0.3); }
+#messageBar {
+  width: 100%;
+  text-align: center;
+  padding: 8px;
+  font-size: 16px;
+  font-style: italic;
+  color: #8a7a3a;
+  min-height: 32px;
+  text-shadow: 0 0 6px rgba(138,122,58,0.4);
+}
+</style>
+</head>
+<body>
+<div id="gameContainer">
+  <div id="hud">
+    <span id="hudLeft">W&#230;lfyll: 0</span>
+    <span id="hudCenter">Fitt: I</span>
+    <span id="hudRight">Earmas: &#9611;&#9611;</span>
+  </div>
+  <canvas id="gameCanvas"></canvas>
+  <div id="messageBar"></div>
+</div>
+<script>
+(function() {
+"use strict";
+
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const hudLeft = document.getElementById('hudLeft');
+const hudCenter = document.getElementById('hudCenter');
+const hudRight = document.getElementById('hudRight');
+const messageBar = document.getElementById('messageBar');
+
+const TILE = 20;
+const COLS = 28;
+const ROWS = 31;
+const W = COLS * TILE;
+const H = ROWS * TILE;
+canvas.width = W;
+canvas.height = H;
+
+function scaleCanvas() {
+  const maxH = window.innerHeight - 80;
+  const maxW = window.innerWidth - 20;
+  const scale = Math.min(maxW / W, maxH / H, 2);
+  canvas.style.width = (W * scale) + 'px';
+  canvas.style.height = (H * scale) + 'px';
+}
+scaleCanvas();
+window.addEventListener('resize', scaleCanvas);
+
+// --- Audio ---
+let audioCtx = null;
+function ensureAudio() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+}
+function playSound(freq, dur, type, vol) {
+  if (!audioCtx) return;
+  try {
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.type = type || 'square';
+    o.frequency.value = freq;
+    g.gain.value = vol || 0.08;
+    g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + dur);
+    o.connect(g); g.connect(audioCtx.destination);
+    o.start(); o.stop(audioCtx.currentTime + dur);
+  } catch(e) {}
+}
+function sndEat() { playSound(440, 0.08, 'square', 0.06); setTimeout(()=>playSound(520, 0.06, 'square', 0.04), 30); }
+function sndSpecialEat() { playSound(330, 0.15, 'sawtooth', 0.09); setTimeout(()=>playSound(440, 0.15, 'triangle', 0.08), 80); setTimeout(()=>playSound(550, 0.2, 'triangle', 0.07), 160); }
+function sndPowerUp() { playSound(200, 0.3, 'sawtooth', 0.08); setTimeout(()=>playSound(300, 0.3, 'triangle', 0.06), 100); setTimeout(()=>playSound(400, 0.4, 'triangle', 0.07), 200); }
+function sndDeath() { for(let i=0;i<5;i++) setTimeout(()=>playSound(300-i*40,0.15,'sawtooth',0.07), i*100); }
+function sndArmRip() { playSound(150, 0.4, 'sawtooth', 0.1); setTimeout(()=>playSound(100, 0.3, 'square', 0.08), 150); setTimeout(()=>playSound(80, 0.5, 'sawtooth', 0.06), 300); }
+function sndLevelComplete() { [523,659,784,1047].forEach((f,i)=>setTimeout(()=>playSound(f,0.25,'triangle',0.08),i*150)); }
+function sndEatGhost() { playSound(600, 0.15, 'square', 0.07); setTimeout(()=>playSound(800, 0.12, 'square', 0.05), 60); }
+function sndCoinFlip() { playSound(500, 0.1, 'triangle', 0.06); setTimeout(()=>playSound(500, 0.1, 'triangle', 0.06), 120); }
+function sndTame() { playSound(660, 0.2, 'sine', 0.07); setTimeout(()=>playSound(880, 0.3, 'sine', 0.06), 100); setTimeout(()=>playSound(660, 0.2, 'sine', 0.05), 250); }
+
+// --- Maze ---
+// 0=path 1=wall 2=dot 3=glof 4=ghost-door 5=empty-path 6=special-victim
+const MAZE_TEMPLATE = [
+  "1111111111111111111111111111",
+  "1222222222222112222222222221",
+  "1211211211212112121121121121",
+  "1311211211212112121121121131",
+  "1222222222222222222222222221",
+  "1211211112111111121112112121",
+  "1222211222222112222221122221",
+  "1211211112112112112111122121",
+  "1222222222112112112222222221",
+  "1112112112112112112112112111",
+  "1222112222200000022221122221",
+  "5550112112111441112112110555",
+  "1111112112100000012112111111",
+  "0000022222100000012222200000",
+  "1111112112100000012112111111",
+  "5550112112111111112112110555",
+  "1222112222200000022221122221",
+  "1112112112112112112112112111",
+  "1222222222112112112222222221",
+  "1211211112112112112111121121",
+  "1622211222222002222221126221",
+  "1212211112112112112111121121",
+  "1222222222222222222222222221",
+  "1211211211212112121121121121",
+  "1211211211212112121121121121",
+  "1222222222222222222222222221",
+  "1211112111212112121112111121",
+  "1211112111212112121112111121",
+  "1222222222222222222222222221",
+  "1222222222222222222222222221",
+  "1111111111111111111111111111",
+];
+
+const SPECIAL_VICTIMS = {
+  '1,20':  { name: 'Hondsc\u012Bo', phrase: 'Hondsc\u012Bo forswealg!', points: 200 },
+  '24,20': { name: '\u00C6schere',  phrase: '\u00C6schere \u0101biten!',  points: 200 },
+};
+
+let maze = [];
+function loadMaze() {
+  maze = [];
+  for (let r = 0; r < ROWS; r++) {
+    maze[r] = [];
+    for (let c = 0; c < COLS; c++) maze[r][c] = parseInt(MAZE_TEMPLATE[r][c]);
+  }
+}
+function countDots() {
+  let n = 0;
+  for (let r = 0; r < ROWS; r++)
+    for (let c = 0; c < COLS; c++)
+      if (maze[r][c] === 2 || maze[r][c] === 3 || maze[r][c] === 6) n++;
+  return n;
+}
+
+// --- OE phrases ---
+const eatPhrases = [
+  "sl\u01E3pende rinc","b\u0101nh\u016Bs gebr\u00E6c","synsn\u01E3dum swealh",
+  "f\u0113t ond folma","bl\u014Dd \u0113drum dranc","l\u012Bc eall forswealg",
+  "gryre l\u0113oda","d\u0113a\u00F0scua","w\u00E6l r\u0113ahte",
+  "heoro dr\u0113orig","g\u016B\u00F0rinc monig"
+];
+const motherPhrases = [
+  "wrecend g\u012Bt leofes","m\u014Ddor Grendles","w\u00E6lfyll wr\u00E6ce",
+  "sorhfulne s\u012B\u00F0","gr\u012Bma m\u0101gnes","atol \u01E3glǣca",
+  "under mist-hleo\u00F0um","mere-w\u012Bf mihtig"
+];
+let phraseIndex = 0;
+function nextPhrase() {
+  const list = isMotherLevel() ? motherPhrases : eatPhrases;
+  const p = list[phraseIndex % list.length];
+  phraseIndex++;
+  return p;
+}
+
+// --- Game State ---
+const S_TITLE=0,S_INTRO=1,S_PLAY=2,S_DYING=3,S_LEVEL_DONE=4,S_GAMEOVER=5,S_PAUSED=6,S_READY=7,S_TRANSITION=8;
+let state = S_TITLE;
+let score=0, arms=2, level=1, dotsLeft=0;
+let highScore = parseInt(localStorage.getItem('grendelHigh2')||'0');
+let msgTimer=0, msgText='';
+let stateTimer=0;
+let frightenTimer=0;
+const FRIGHTEN_DUR = 360;
+let coinFlipResult=null, coinFlipTimer=0;
+let tamedTimer = 0; // Wealtheow taming effect
+
+function isMotherLevel() { return level % 2 === 0; }
+
+// --- Entities ---
+const DX=[1,0,-1,0], DY=[0,1,0,-1];
+const START_COL=13, START_ROW=20;
+const GHOST_EXIT_COL=13, GHOST_EXIT_ROW=10;
+
+function Entity(sc,sr,spd) {
+  this.startCol=sc; this.startRow=sr;
+  this.col=sc; this.row=sr;
+  this.x=sc*TILE+TILE/2; this.y=sr*TILE+TILE/2;
+  this.dir=2; this.nextDir=-1;
+  this.speed=spd; this.moving=false; this.animFrame=0;
+}
+Entity.prototype.reset = function() {
+  this.col=this.startCol; this.row=this.startRow;
+  this.x=this.startCol*TILE+TILE/2; this.y=this.startRow*TILE+TILE/2;
+  this.dir=2; this.nextDir=-1; this.moving=false;
+};
+
+function isWalkable(t) { return t===0||t===2||t===3||t===5||t===6; }
+function canMove(c,r,d) {
+  let nc=c+DX[d], nr=r+DY[d];
+  if(nc<0) nc=COLS-1; if(nc>=COLS) nc=0;
+  if(nr<0||nr>=ROWS) return false;
+  return isWalkable(maze[nr][nc]);
+}
+function canMoveGhost(c,r,d,door) {
+  let nc=c+DX[d], nr=r+DY[d];
+  if(nc<0) nc=COLS-1; if(nc>=COLS) nc=0;
+  if(nr<0||nr>=ROWS) return false;
+  const t=maze[nr][nc];
+  if(t===1) return false;
+  if(t===4&&!door) return false;
+  return true;
+}
+
+let player = new Entity(START_COL,START_ROW,1.6);
+
+function Ghost(name,c,r,color,sc,sr,spd) {
+  Entity.call(this,c,r,spd||1.8);
+  this.name=name; this.color=color;
+  this.scatterCol=sc; this.scatterRow=sr;
+  this.baseSpeed=spd||1.8;
+  this.inHouse=true; this.houseTimer=0;
+  this.eaten=false; this.frightened=false;
+}
+Ghost.prototype=Object.create(Entity.prototype);
+Ghost.prototype.reset=function(){
+  Entity.prototype.reset.call(this);
+  this.dir=2; this.nextDir=2;
+  this.inHouse=true; this.houseTimer=0;
+  this.eaten=false; this.frightened=false;
+};
+
+let ghosts=[];
+function createGhosts() {
+  ghosts=[
+    new Ghost('B\u0113owulf',  13,13,'#4488ff',25,0,1.8),
+    new Ghost('Wulfg\u0101r',  14,13,'#ff4444',2,0,1.8),
+    new Ghost('Unfer\u00F0',   12,13,'#ff88cc',25,29,1.8),
+    new Ghost('Hr\u014D\u00F0g\u0101r',15,13,'#aaaaaa',2,29,1.1),
+    new Ghost('W\u0113alh\u00FE\u0113ow',13,12,'#ddaa44',14,15,1.3),
+  ];
+  ghosts.forEach(g=>{g.nextDir=2;});
+}
+
+const HOUSE_RELEASE=[1,150,300,450,200];
+const MODE_TIMES=[420,1200,420,1200,300,1200,300,99999];
+let modeIndex=0, modeTimer=0;
+function getGlobalMode(){ return (modeIndex%2===0)?'scatter':'chase'; }
+
+// --- Movement ---
+function moveEntity(e,isGhost,door) {
+  const cx=e.col*TILE+TILE/2, cy=e.row*TILE+TILE/2;
+  const tol=e.speed*0.9;
+  const atC=Math.abs(e.x-cx)<tol && Math.abs(e.y-cy)<tol;
+  if(atC){
+    e.x=cx; e.y=cy;
+    const fn=isGhost?((c,r,d)=>canMoveGhost(c,r,d,door)):canMove;
+    if(!isGhost && e.nextDir===-1){e.moving=false;return;}
+    if(e.nextDir!==-1 && e.nextDir!==e.dir && fn(e.col,e.row,e.nextDir)) e.dir=e.nextDir;
+    if(fn(e.col,e.row,e.dir)) e.moving=true;
+    else{e.moving=false;return;}
+  }
+  if(e.moving){
+    e.x+=DX[e.dir]*e.speed;
+    e.y+=DY[e.dir]*e.speed;
+    e.col=Math.round((e.x-TILE/2)/TILE);
+    e.row=Math.round((e.y-TILE/2)/TILE);
+    if(e.x<-TILE/2){e.x+=W+TILE;e.col=COLS-1;}
+    if(e.x>W+TILE/2){e.x-=W+TILE;e.col=0;}
+    if(e.col<0) e.col=0;
+    if(e.col>=COLS) e.col=COLS-1;
+  }
+  e.animFrame++;
+}
+
+// --- Ghost AI ---
+function distSq(a,b,c,d){return(a-c)*(a-c)+(b-d)*(b-d);}
+
+function chooseGhostDir(g) {
+  if(g.inHouse) return;
+  const cx=g.col*TILE+TILE/2, cy=g.row*TILE+TILE/2;
+  if(Math.abs(g.x-cx)>1.5||Math.abs(g.y-cy)>1.5) return;
+
+  let tc,tr;
+  if(g.eaten){
+    tc=GHOST_EXIT_COL; tr=GHOST_EXIT_ROW;
+    if(Math.abs(g.col-GHOST_EXIT_COL)<=1 && Math.abs(g.row-GHOST_EXIT_ROW)<=1){
+      g.eaten=false; g.frightened=false; g.inHouse=true; g.houseTimer=0;
+      g.col=g.startCol; g.row=g.startRow;
+      g.x=g.col*TILE+TILE/2; g.y=g.row*TILE+TILE/2;
+      g.speed=ghostSpeed(g); return;
+    }
+  } else if(g.frightened){
+    const dirs=[0,1,2,3].filter(d=>canMoveGhost(g.col,g.row,d,false)&&d!==(g.dir+2)%4);
+    if(dirs.length>0) g.nextDir=dirs[Math.floor(Math.random()*dirs.length)];
+    return;
+  } else if(g.name==='Hr\u014D\u00F0g\u0101r'){
+    tc=player.col<COLS/2?COLS-2:1; tr=player.row<ROWS/2?ROWS-2:1;
+  } else if(g.name==='W\u0113alh\u00FE\u0113ow'){
+    // Wealtheow patrols toward player but not aggressively — she moves to intercept
+    if(getGlobalMode()==='chase'){
+      tc=player.col+DX[player.dir]*3; tr=player.row+DY[player.dir]*3;
+    } else { tc=g.scatterCol; tr=g.scatterRow; }
+  } else if(getGlobalMode()==='scatter'){
+    tc=g.scatterCol; tr=g.scatterRow;
+  } else {
+    if(g.name==='B\u0113owulf'){tc=player.col;tr=player.row;}
+    else if(g.name==='Wulfg\u0101r'){tc=player.col+DX[player.dir]*4;tr=player.row+DY[player.dir]*4;}
+    else if(g.name==='Unfer\u00F0'){
+      const b=ghosts[0];
+      const ac=player.col+DX[player.dir]*2, ar=player.row+DY[player.dir]*2;
+      tc=ac+(ac-b.col); tr=ar+(ar-b.row);
+    } else {tc=g.scatterCol;tr=g.scatterRow;}
+  }
+
+  let best=g.dir, bestD=Infinity;
+  for(let i=0;i<4;i++){
+    const d=[3,2,1,0][i];
+    if(d===(g.dir+2)%4) continue;
+    if(!canMoveGhost(g.col,g.row,d,g.eaten)) continue;
+    let nc=g.col+DX[d], nr=g.row+DY[d];
+    if(nc<0) nc=COLS-1; if(nc>=COLS) nc=0;
+    const dd=distSq(nc,nr,tc,tr);
+    if(dd<bestD){bestD=dd;best=d;}
+  }
+  g.nextDir=best;
+}
+
+function ghostSpeed(g){
+  if(g.name==='Hr\u014D\u00F0g\u0101r') return Math.min(1.1+(level-1)*0.1,1.6);
+  if(g.name==='W\u0113alh\u00FE\u0113ow') return Math.min(1.3+(level-1)*0.1,1.8);
+  return Math.min(1.8+(level-1)*0.2,2.8);
+}
+function playerSpeed(){ return tamedTimer>0 ? 0.8 : Math.min(1.6+(level-1)*0.1,2.4); }
+function frightenDur(){ return Math.max(FRIGHTEN_DUR-(level-1)*60,120); }
+
+function updateGhostHouse(g,i){
+  if(!g.inHouse) return;
+  g.houseTimer++;
+  const rt=HOUSE_RELEASE[i]/Math.max(1,level*0.7);
+  if(g.houseTimer>=rt){
+    g.inHouse=false;
+    g.col=GHOST_EXIT_COL; g.row=GHOST_EXIT_ROW;
+    g.x=g.col*TILE+TILE/2; g.y=g.row*TILE+TILE/2;
+    g.dir=2; g.nextDir=2;
+    g.speed=ghostSpeed(g); g.eaten=false; g.frightened=false;
+  } else {
+    const cy2=g.startRow*TILE+TILE/2;
+    g.y=cy2+Math.sin(g.houseTimer*0.1)*4;
+    g.x=g.startCol*TILE+TILE/2;
+  }
+}
+
+// --- Input ---
+window.addEventListener('keydown', e => {
+  if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key)) e.preventDefault();
+  ensureAudio();
+  if(state===S_TITLE){ if(e.key==='Enter'||e.key===' ') {state=S_INTRO;stateTimer=0;} }
+  else if(state===S_INTRO){ if(e.key==='Enter'||e.key===' ') startGame(); }
+  else if(state===S_GAMEOVER){ if(stateTimer>60&&(e.key==='Enter'||e.key===' ')){state=S_TITLE;stateTimer=0;} }
+  else if(state===S_TRANSITION){ if(stateTimer>90&&(e.key==='Enter'||e.key===' ')){startLevel();} }
+  else if(state===S_READY){
+    const dk=dirKey(e.key);
+    if(dk>=0){player.nextDir=dk;state=S_PLAY;}
+    else if(e.key==='Enter'||e.key===' ') state=S_PLAY;
+  } else if(state===S_PLAY){
+    const dk=dirKey(e.key);
+    if(dk>=0) player.nextDir=dk;
+    else if(e.key==='p'||e.key==='P') state=S_PAUSED;
+  } else if(state===S_PAUSED){
+    if(e.key==='p'||e.key==='P'||e.key==='Escape') state=S_PLAY;
+  }
+});
+function dirKey(k){
+  if(k==='ArrowRight'||k==='d'||k==='D') return 0;
+  if(k==='ArrowDown'||k==='s'||k==='S') return 1;
+  if(k==='ArrowLeft'||k==='a'||k==='A') return 2;
+  if(k==='ArrowUp'||k==='w'||k==='W') return 3;
+  return -1;
+}
+
+// --- Game flow ---
+function startGame(){
+  score=0; arms=2; level=1; phraseIndex=0;
+  startLevel();
+}
+function startLevel(){
+  loadMaze(); dotsLeft=countDots();
+  modeIndex=0; modeTimer=0; frightenTimer=0;
+  coinFlipResult=null; coinFlipTimer=0; tamedTimer=0;
+
+  player=new Entity(START_COL,START_ROW,playerSpeed());
+  player.dir=2; player.nextDir=-1;
+  createGhosts();
+  state=S_READY; stateTimer=0;
+  if(isMotherLevel())
+    setMessage("Fitt II \u2014 Grendles m\u014Ddor wrecend cyme\u00F0!");
+  else
+    setMessage("Fitt I \u2014 Grendel com\u00F0 t\u014D Heorote!");
+}
+function resetPositions(){
+  player.col=START_COL; player.row=START_ROW;
+  player.x=player.col*TILE+TILE/2; player.y=player.row*TILE+TILE/2;
+  player.dir=2; player.nextDir=-1; player.speed=playerSpeed(); player.moving=false;
+  createGhosts(); frightenTimer=0; modeIndex=0; modeTimer=0;
+  coinFlipResult=null; coinFlipTimer=0; tamedTimer=0;
+}
+function setMessage(t){msgText=t;msgTimer=180;}
+
+// --- Collisions ---
+let ghostEatCombo=0;
+
+function checkCollisions(){
+  const gc=player.col, gr=player.row;
+  if(gc>=0&&gc<COLS&&gr>=0&&gr<ROWS){
+    const t=maze[gr][gc];
+    if(t===2){
+      maze[gr][gc]=0; score+=10; dotsLeft--;
+      sndEat();
+      if(Math.random()<0.35) setMessage(nextPhrase());
+    } else if(t===6){
+      maze[gr][gc]=0; dotsLeft--;
+      const v=SPECIAL_VICTIMS[gc+','+gr];
+      score+=(v?v.points:200);
+      sndSpecialEat();
+      setMessage(v?v.phrase:"synsn\u01E3dum swealh!");
+    } else if(t===3){
+      maze[gr][gc]=0; score+=50; dotsLeft--;
+      sndPowerUp(); frightenTimer=frightenDur(); ghostEatCombo=0;
+      setMessage(isMotherLevel()?"M\u014Ddor his gl\u014Df genam!":"Grendel his gl\u014Df genam!");
+      ghosts.forEach(g=>{
+        if(!g.inHouse&&!g.eaten){
+          if(g.name==='B\u0113owulf') return; // Beowulf never frightened
+          if(g.name==='W\u0113alh\u00FE\u0113ow') return; // Wealtheow not frightened
+          g.frightened=true; g.dir=(g.dir+2)%4; g.speed=1.0;
+        }
+      });
+    }
+  }
+  if(dotsLeft<=0){
+    state=S_LEVEL_DONE; stateTimer=0; sndLevelComplete();
+    setMessage(isMotherLevel()?"Wrecend gefylled! \u2014 Vengeance fulfilled!":"Heorot is \u0101fylled!");
+    return;
+  }
+
+  // Ghost collisions
+  for(let i=0;i<ghosts.length;i++){
+    const g=ghosts[i];
+    if(g.inHouse||g.eaten) continue;
+    if(Math.abs(player.x-g.x)<TILE*0.65 && Math.abs(player.y-g.y)<TILE*0.65){
+
+      // BEOWULF: rips an arm off
+      if(g.name==='B\u0113owulf'){
+        arms--;
+        sndArmRip();
+        if(arms<=0){
+          state=S_DYING; stateTimer=0;
+          setMessage("B\u0113owulf h\u00E6fde Grendles hand! \u2014 Both arms torn!");
+          return;
+        } else {
+          // Lose an arm but survive — brief invulnerability via reset
+          setMessage("Earm \u0101sliten! \u2014 Arm ripped off!");
+          resetPositions();
+          state=S_READY; stateTimer=0;
+          return;
+        }
+      }
+
+      // UNFERTH: 50/50
+      if(g.name==='Unfer\u00F0' && !g.frightened){
+        sndCoinFlip();
+        if(Math.random()<0.5){
+          g.eaten=true; g.frightened=false; g.speed=3.5;
+          score+=300; sndEatGhost();
+          setMessage("Unfer\u00F0 ofercumen!");
+          coinFlipResult='win'; coinFlipTimer=90;
+        } else {
+          arms--;
+          sndArmRip();
+          if(arms<=0){state=S_DYING;stateTimer=0;setMessage("Unfer\u00F0 earm \u0101slat!");return;}
+          setMessage("Unfer\u00F0 wi\u00F0st\u014Dd! \u2014 Arm lost!");
+          coinFlipResult='lose'; coinFlipTimer=90;
+          resetPositions(); state=S_READY; stateTimer=0; return;
+        }
+        continue;
+      }
+
+      // WEALTHEOW: tames (slows) Grendel
+      if(g.name==='W\u0113alh\u00FE\u0113ow' && !g.frightened){
+        tamedTimer = 240; // 4 seconds at 60fps
+        player.speed = 0.8;
+        sndTame();
+        setMessage("W\u0113alh\u00FE\u0113ow getemode \u00FE\u0113 \u2014 The queen tames you!");
+        // Wealtheow retreats after taming
+        g.eaten=true; g.speed=3.5;
+        continue;
+      }
+
+      // HROTHGAR: always catchable
+      if(g.frightened || g.name==='Hr\u014D\u00F0g\u0101r'){
+        g.eaten=true; g.frightened=false; g.speed=3.5;
+        ghostEatCombo++;
+        const pts=(g.name==='Hr\u014D\u00F0g\u0101r')?500:200*Math.pow(2,ghostEatCombo-1);
+        score+=pts; sndEatGhost();
+        setMessage(g.name+" \u2014 "+pts);
+      } else {
+        // Wulfgar kills normally
+        arms--;
+        sndArmRip();
+        if(arms<=0){state=S_DYING;stateTimer=0;setMessage(g.name+" sl\u014Dg Grendel!");return;}
+        setMessage("Earm \u0101sliten!");
+        resetPositions(); state=S_READY; stateTimer=0; return;
+      }
+    }
+  }
+}
+
+// --- Update ---
+function update(){
+  stateTimer++;
+  if(coinFlipTimer>0) coinFlipTimer--;
+
+  if(state===S_READY){
+    ghosts.forEach((g,i)=>updateGhostHouse(g,i));
+    if(msgTimer>0) msgTimer--;
+    return;
+  }
+
+  if(state===S_PLAY){
+    // Tame timer
+    if(tamedTimer>0){
+      tamedTimer--;
+      player.speed=0.8;
+      if(tamedTimer<=0) player.speed=playerSpeed();
+    }
+
+    moveEntity(player,false,false);
+
+    modeTimer++;
+    if(modeIndex<MODE_TIMES.length && modeTimer>=MODE_TIMES[modeIndex]){
+      modeTimer=0; modeIndex++;
+      ghosts.forEach(g=>{
+        if(!g.inHouse&&!g.frightened&&!g.eaten){g.dir=(g.dir+2)%4;g.nextDir=g.dir;}
+      });
+    }
+    if(frightenTimer>0){
+      frightenTimer--;
+      if(frightenTimer<=0) ghosts.forEach(g=>{
+        if(g.frightened){g.frightened=false;g.speed=ghostSpeed(g);}
+      });
+    }
+    ghosts.forEach((g,i)=>{
+      updateGhostHouse(g,i);
+      if(!g.inHouse){chooseGhostDir(g);moveEntity(g,true,g.eaten);}
+    });
+    checkCollisions();
+    if(msgTimer>0) msgTimer--;
+  } else if(state===S_DYING){
+    if(stateTimer>=90){
+      state=S_GAMEOVER; stateTimer=0;
+      if(score>highScore){highScore=score;localStorage.setItem('grendelHigh2',highScore.toString());}
+      setMessage("B\u0113owulf h\u00E6fde Grendles hand!");
+    }
+  } else if(state===S_LEVEL_DONE){
+    if(stateTimer>=180){
+      level++;
+      if(isMotherLevel()){
+        state=S_TRANSITION; stateTimer=0;
+      } else {
+        startLevel();
+      }
+    }
+  } else if(state===S_TRANSITION){
+    if(msgTimer>0) msgTimer--;
+  } else if(state===S_GAMEOVER){
+    if(msgTimer>0) msgTimer--;
+  }
+}
+
+// ============================================================
+// DRAWING — all the pixel-art humanoid sprites
+// ============================================================
+const wallPat=(function(){
+  const c=document.createElement('canvas');c.width=TILE;c.height=TILE;
+  const x=c.getContext('2d');
+  x.fillStyle='#2a1a08';x.fillRect(0,0,TILE,TILE);
+  x.strokeStyle='#3a2810';x.lineWidth=0.5;
+  for(let i=0;i<4;i++){x.beginPath();x.moveTo(0,i*TILE/3+2);x.lineTo(TILE,i*TILE/3+2);x.stroke();}
+  x.strokeStyle='#4a3a18';x.lineWidth=1;x.strokeRect(0.5,0.5,TILE-1,TILE-1);
+  return ctx.createPattern(c,'repeat');
+})();
+
+function drawMaze(frame){
+  for(let r=0;r<ROWS;r++) for(let c=0;c<COLS;c++){
+    const x=c*TILE, y=r*TILE, t=maze[r][c];
+    if(t===1){ctx.fillStyle=wallPat;ctx.fillRect(x,y,TILE,TILE);}
+    else if(t===2){
+      ctx.fillStyle='#d4a017';ctx.shadowBlur=3;ctx.shadowColor='#d4a017';
+      ctx.beginPath();ctx.arc(x+TILE/2,y+TILE/2,2.5,0,Math.PI*2);ctx.fill();ctx.shadowBlur=0;
+    } else if(t===6){
+      const p=0.7+0.3*Math.sin(frame*0.05);
+      const cx2=x+TILE/2, cy2=y+TILE/2;
+      ctx.shadowBlur=15;ctx.shadowColor='rgba(255,180,40,0.6)';
+      ctx.fillStyle='rgba(255,180,40,'+p+')';
+      // Sleeping warrior shape
+      ctx.beginPath();ctx.ellipse(cx2,cy2,7,5,0,0,Math.PI*2);ctx.fill();
+      ctx.beginPath();ctx.arc(cx2-5,cy2-2,3,0,Math.PI*2);ctx.fill();
+      ctx.shadowBlur=0;
+      const v=SPECIAL_VICTIMS[c+','+r];
+      if(v){ctx.fillStyle='rgba(255,200,80,'+(p*0.7)+')';ctx.font='8px Georgia';ctx.textAlign='center';ctx.fillText(v.name,cx2,cy2+14);}
+    } else if(t===3){
+      const p=0.6+0.4*Math.sin(frame*0.06);
+      ctx.fillStyle='rgba(100,255,100,'+p+')';ctx.shadowBlur=12;ctx.shadowColor='#66ff66';
+      ctx.beginPath();ctx.arc(x+TILE/2,y+TILE/2,6,0,Math.PI*2);ctx.fill();ctx.shadowBlur=0;
+      ctx.fillStyle='rgba(200,255,200,'+(p*0.6)+')';
+      ctx.beginPath();ctx.arc(x+TILE/2,y+TILE/2,3,0,Math.PI*2);ctx.fill();
+    } else if(t===4){
+      ctx.fillStyle='#997722';ctx.fillRect(x+2,y+TILE/2-2,TILE-4,4);
+    }
+  }
+  // Hearth glow
+  const hx=14*TILE,hy=13*TILE;
+  const gr=ctx.createRadialGradient(hx,hy,5,hx,hy,TILE*4);
+  gr.addColorStop(0,'rgba(200,120,20,0.04)');gr.addColorStop(1,'rgba(200,120,20,0)');
+  ctx.fillStyle=gr;ctx.fillRect(hx-TILE*4,hy-TILE*4,TILE*8,TILE*8);
+}
+
+// --- Humanoid sprite drawing ---
+// facing: 0=right,1=down,2=left,3=up
+function drawHumanoid(x,y,dir,frame,opts){
+  // opts: headColor, bodyColor, legColor, armColor, headR, bodyW, bodyH
+  const hc=opts.headColor||'#cc9966';
+  const bc=opts.bodyColor||'#888';
+  const lc=opts.legColor||opts.bodyColor||'#666';
+  const ac=opts.armColor||hc;
+  const hr=opts.headR||3;
+  const bw=opts.bodyW||7;
+  const bh=opts.bodyH||6;
+  const facing=(dir===0)?1:(dir===2)?-1:0; // left/right mirror
+  const walk=opts.noWalk?0:Math.sin(frame*0.3)*2;
+
+  // Legs
+  ctx.fillStyle=lc;
+  ctx.fillRect(x-2, y+1, 2, 5+walk*0.3);
+  ctx.fillRect(x+1, y+1, 2, 5-walk*0.3);
+
+  // Body
+  ctx.fillStyle=bc;
+  ctx.fillRect(x-bw/2, y-bh+1, bw, bh);
+
+  // Arms (drawn by caller or default)
+  if(opts.drawArms) opts.drawArms(x,y,dir,frame,facing);
+  else {
+    ctx.fillStyle=ac;
+    // left arm
+    ctx.fillRect(x-bw/2-3, y-bh+2, 3, 2);
+    // right arm
+    ctx.fillRect(x+bw/2, y-bh+2, 3, 2);
+  }
+
+  // Head
+  ctx.fillStyle=hc;
+  ctx.beginPath();
+  ctx.arc(x+facing*1, y-bh-hr+1, hr, 0, Math.PI*2);
+  ctx.fill();
+
+  // Eyes
+  if(opts.eyeColor){
+    ctx.fillStyle=opts.eyeColor;
+    const ex=x+facing*2;
+    ctx.fillRect(ex-1, y-bh-hr, 1, 1);
+    ctx.fillRect(ex+1, y-bh-hr, 1, 1);
+  }
+
+  // Extra drawing
+  if(opts.extra) opts.extra(x,y,dir,frame,facing);
+}
+
+// --- GRENDEL sprite ---
+function drawPlayer(frame){
+  const x=player.x, y=player.y;
+  const dir=player.dir;
+  const isMother=isMotherLevel();
+  const skinColor=isMother?'#1a5a2a':'#2a8a2a';
+  const bodyColor=isMother?'#0a3a1a':'#1a5a1a';
+
+  // Tamed glow
+  if(tamedTimer>0){
+    ctx.fillStyle='rgba(220,170,40,'+(0.15+0.1*Math.sin(frame*0.15))+')';
+    ctx.beginPath();ctx.arc(x,y-2,14,0,Math.PI*2);ctx.fill();
+  }
+
+  // Green aura
+  ctx.fillStyle='rgba(0,80,0,0.3)';
+  ctx.shadowBlur=15;ctx.shadowColor='rgba(0,120,0,0.4)';
+  ctx.beginPath();ctx.arc(x,y-2,12,0,Math.PI*2);ctx.fill();ctx.shadowBlur=0;
+
+  drawHumanoid(x,y,dir,frame,{
+    headColor:skinColor,
+    bodyColor:bodyColor,
+    legColor:'#0a3a0a',
+    armColor:skinColor,
+    headR:3.5,
+    bodyW:8,
+    bodyH:7,
+    eyeColor:'#00ff00',
+    drawArms:function(px,py,d,f,facing){
+      const bw=8, bh=7;
+      const swing=Math.sin(f*0.3)*3;
+      ctx.lineWidth=2.5;
+      ctx.lineCap='round';
+
+      // LEFT ARM (Grendel's left)
+      if(arms>=2 || isMother){
+        ctx.strokeStyle=skinColor;
+        ctx.beginPath();
+        ctx.moveTo(px-bw/2, py-bh+3);
+        const lax=px-bw/2-5-Math.abs(swing*0.5);
+        const lay=py-bh+3+swing;
+        ctx.lineTo(lax,lay);
+        ctx.stroke();
+        // Claw
+        ctx.strokeStyle='#005500';
+        ctx.lineWidth=1;
+        ctx.beginPath();ctx.moveTo(lax,lay);ctx.lineTo(lax-2,lay-2);ctx.stroke();
+        ctx.beginPath();ctx.moveTo(lax,lay);ctx.lineTo(lax-2,lay+1);ctx.stroke();
+      } else {
+        // Stump! Ripped off
+        ctx.strokeStyle='#660000';ctx.lineWidth=2;
+        ctx.beginPath();ctx.moveTo(px-bw/2,py-bh+3);ctx.lineTo(px-bw/2-2,py-bh+3);ctx.stroke();
+        // Blood drip
+        ctx.fillStyle='#880000';
+        const drip=Math.sin(f*0.1)*2;
+        ctx.fillRect(px-bw/2-2, py-bh+4+drip, 1, 2);
+      }
+
+      // RIGHT ARM
+      if(arms>=1){
+        ctx.strokeStyle=skinColor;ctx.lineWidth=2.5;
+        ctx.beginPath();
+        ctx.moveTo(px+bw/2, py-bh+3);
+        const rax=px+bw/2+5+Math.abs(swing*0.5);
+        const ray=py-bh+3-swing;
+        ctx.lineTo(rax,ray);
+        ctx.stroke();
+        ctx.strokeStyle='#005500';ctx.lineWidth=1;
+        ctx.beginPath();ctx.moveTo(rax,ray);ctx.lineTo(rax+2,ray-2);ctx.stroke();
+        ctx.beginPath();ctx.moveTo(rax,ray);ctx.lineTo(rax+2,ray+1);ctx.stroke();
+      } else {
+        ctx.strokeStyle='#660000';ctx.lineWidth=2;
+        ctx.beginPath();ctx.moveTo(px+bw/2,py-bh+3);ctx.lineTo(px+bw/2+2,py-bh+3);ctx.stroke();
+        ctx.fillStyle='#880000';
+        const drip2=Math.sin(f*0.13)*2;
+        ctx.fillRect(px+bw/2+2, py-bh+4+drip2, 1, 2);
+      }
+      ctx.lineWidth=1;ctx.lineCap='butt';
+    },
+    extra:function(px,py,d,f,facing){
+      // Glowing eyes
+      ctx.fillStyle='#00ff00';ctx.shadowBlur=6;ctx.shadowColor='#00ff00';
+      const bh=7,hr=3.5;
+      const ey=py-bh-hr+1;
+      ctx.fillRect(px+facing*2-1, ey-1, 2, 2);
+      ctx.fillRect(px+facing*2+2, ey-1, 2, 2);
+      ctx.shadowBlur=0;
+
+      // Mother: long dark hair
+      if(isMother){
+        ctx.strokeStyle='#0a2a0a';ctx.lineWidth=1;
+        for(let i=-2;i<=2;i++){
+          ctx.beginPath();
+          ctx.moveTo(px+i, py-bh-hr*2+2);
+          ctx.quadraticCurveTo(px+i+Math.sin(f*0.06+i)*1.5, py-bh+2, px+i*1.5, py-bh+5);
+          ctx.stroke();
+        }
+      }
+
+      // Mouth
+      ctx.fillStyle='#5a0000';
+      const mopen=player.moving?(1+Math.sin(f*0.3)):0;
+      ctx.fillRect(px+facing*2, ey+3, 3, 1+mopen);
+    }
+  });
+}
+
+// --- BEOWULF sprite (Conan-like) ---
+function drawBeowulf(g,frame){
+  const x=g.x, y=g.y;
+  if(g.eaten){drawGhostEyes(x,y,g.dir);return;}
+  if(g.frightened){drawFrightened(x,y,g.dir,frame);return;}
+
+  drawHumanoid(x,y,g.dir,frame,{
+    headColor:'#ddaa77',
+    bodyColor:'#4488ff',
+    legColor:'#3366cc',
+    bodyW:9, // broad/muscular
+    bodyH:7,
+    headR:3.5,
+    drawArms:function(px,py,d,f,facing){
+      // Muscular arms
+      ctx.fillStyle='#ddaa77';
+      ctx.fillRect(px-9/2-4, py-6, 4, 3); // left arm, thick
+      ctx.fillRect(px+9/2, py-6, 4, 3);   // right arm
+      // Sword in right hand
+      ctx.strokeStyle='#ccddff';ctx.lineWidth=1.5;
+      ctx.beginPath();
+      ctx.moveTo(px+9/2+4, py-7);
+      ctx.lineTo(px+9/2+4, py-13);
+      ctx.stroke();
+      // Sword crossguard
+      ctx.strokeStyle='#d4a017';
+      ctx.beginPath();
+      ctx.moveTo(px+9/2+2, py-7);
+      ctx.lineTo(px+9/2+6, py-7);
+      ctx.stroke();
+      ctx.lineWidth=1;
+    },
+    extra:function(px,py,d,f,facing){
+      // Long hair
+      ctx.strokeStyle='#554433';ctx.lineWidth=1.5;
+      for(let i=-1;i<=1;i++){
+        ctx.beginPath();
+        ctx.moveTo(px+i*2, py-10);
+        ctx.quadraticCurveTo(px+i*2-facing*2, py-6, px+i*3-facing*3, py-3);
+        ctx.stroke();
+      }
+      ctx.lineWidth=1;
+      // Heroic glow
+      ctx.fillStyle='rgba(100,160,255,0.1)';
+      ctx.beginPath();ctx.arc(px,py-3,10,0,Math.PI*2);ctx.fill();
+    }
+  });
+}
+
+// --- HROTHGAR sprite (hoary old king) ---
+function drawHrothgar(g,frame){
+  const x=g.x, y=g.y;
+  if(g.eaten){drawGhostEyes(x,y,g.dir);return;}
+  if(g.frightened){drawFrightened(x,y,g.dir,frame);return;}
+
+  // Stooped - shift head forward
+  const facing=(g.dir===0)?1:(g.dir===2)?-1:0;
+
+  drawHumanoid(x,y,g.dir,frame,{
+    headColor:'#ccbbaa',
+    bodyColor:'#888888',
+    legColor:'#666666',
+    bodyW:6, // thin
+    bodyH:6,
+    headR:3,
+    noWalk:false,
+    drawArms:function(px,py,d,f,fac){
+      // Thin old arms, maybe a staff
+      ctx.fillStyle='#ccbbaa';
+      ctx.fillRect(px-5, py-5, 2, 2);
+      ctx.fillRect(px+3, py-5, 2, 2);
+      // Walking staff
+      ctx.strokeStyle='#8a7a5a';ctx.lineWidth=1.5;
+      ctx.beginPath();
+      ctx.moveTo(px+5, py-6);
+      ctx.lineTo(px+4, py+6);
+      ctx.stroke();ctx.lineWidth=1;
+    },
+    extra:function(px,py,d,f,fac){
+      // Crown
+      ctx.fillStyle='#d4a017';
+      const cy=py-9;
+      ctx.beginPath();
+      ctx.moveTo(px-4,cy+2); ctx.lineTo(px-4,cy-1); ctx.lineTo(px-2,cy+1);
+      ctx.lineTo(px,cy-2); ctx.lineTo(px+2,cy+1);
+      ctx.lineTo(px+4,cy-1); ctx.lineTo(px+4,cy+2);
+      ctx.closePath(); ctx.fill();
+
+      // Long white beard
+      ctx.strokeStyle='#dddddd';ctx.lineWidth=1;
+      for(let i=-2;i<=2;i++){
+        ctx.beginPath();
+        ctx.moveTo(px+i*0.8, py-5);
+        ctx.quadraticCurveTo(px+i+Math.sin(f*0.06+i)*1, py-1, px+i*1.2+Math.sin(f*0.04+i)*1.5, py+4);
+        ctx.stroke();
+      }
+
+      // Wrinkle lines
+      ctx.strokeStyle='#999988';ctx.lineWidth=0.5;
+      for(let i=0;i<2;i++){
+        ctx.beginPath();
+        ctx.moveTo(px-3, py-8-i*1.2);
+        ctx.lineTo(px+3, py-8-i*1.2);
+        ctx.stroke();
+      }
+    }
+  });
+}
+
+// --- WEALTHEOW sprite (queen) ---
+function drawWealtheow(g,frame){
+  const x=g.x, y=g.y;
+  if(g.eaten){drawGhostEyes(x,y,g.dir);return;}
+  if(g.frightened){drawFrightened(x,y,g.dir,frame);return;}
+  const facing=(g.dir===0)?1:(g.dir===2)?-1:0;
+
+  // Head
+  ctx.fillStyle='#eeddcc';
+  ctx.beginPath();ctx.arc(x+facing, y-9, 3, 0, Math.PI*2);ctx.fill();
+
+  // Hair - golden
+  ctx.strokeStyle='#d4a017';ctx.lineWidth=1;
+  for(let i=-1;i<=1;i++){
+    ctx.beginPath();
+    ctx.moveTo(x+i*2, y-12);
+    ctx.quadraticCurveTo(x+i*3, y-6, x+i*3.5, y-3);
+    ctx.stroke();
+  }
+
+  // Crown/circlet
+  ctx.strokeStyle='#ffcc44';ctx.lineWidth=1.5;
+  ctx.beginPath();
+  ctx.arc(x+facing, y-9, 4, Math.PI*0.8, Math.PI*0.2);
+  ctx.stroke();ctx.lineWidth=1;
+
+  // Dress/robe (triangle shape)
+  ctx.fillStyle='#ddaa44';
+  ctx.beginPath();
+  ctx.moveTo(x-3, y-6);
+  ctx.lineTo(x+3, y-6);
+  ctx.lineTo(x+6, y+6);
+  ctx.lineTo(x-6, y+6);
+  ctx.closePath();
+  ctx.fill();
+
+  // Dress detail
+  ctx.strokeStyle='#cc9933';ctx.lineWidth=0.5;
+  ctx.beginPath();ctx.moveTo(x-1,y-6);ctx.lineTo(x-2,y+6);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(x+1,y-6);ctx.lineTo(x+2,y+6);ctx.stroke();
+
+  // Arms holding mead cup
+  ctx.fillStyle='#eeddcc';
+  ctx.fillRect(x-5, y-5, 2, 2);
+  ctx.fillRect(x+3, y-5, 2, 2);
+
+  // Mead cup
+  ctx.fillStyle='#d4a017';
+  ctx.fillRect(x+4, y-7, 3, 3);
+  ctx.fillStyle='#ffcc44';
+  ctx.fillRect(x+4, y-7, 3, 1);
+
+  // Warm glow
+  ctx.fillStyle='rgba(220,170,40,0.08)';
+  ctx.beginPath();ctx.arc(x,y-2,12,0,Math.PI*2);ctx.fill();
+
+  // Eyes
+  ctx.fillStyle='#446688';
+  ctx.fillRect(x+facing*2-1, y-10, 1, 1);
+  ctx.fillRect(x+facing*2+1, y-10, 1, 1);
+}
+
+// --- WULFGAR / UNFERTH (generic warriors) ---
+function drawWarrior(g,frame){
+  const x=g.x, y=g.y;
+  if(g.eaten){drawGhostEyes(x,y,g.dir);return;}
+  if(g.frightened){drawFrightened(x,y,g.dir,frame);return;}
+
+  const isUnferth = g.name==='Unfer\u00F0';
+  drawHumanoid(x,y,g.dir,frame,{
+    headColor:'#ddaa77',
+    bodyColor:g.color,
+    legColor:'#553333',
+    bodyW:7,
+    bodyH:6,
+    headR:3,
+    drawArms:function(px,py,d,f,fac){
+      ctx.fillStyle='#ddaa77';
+      ctx.fillRect(px-6, py-5, 3, 2);
+      ctx.fillRect(px+3, py-5, 3, 2);
+      if(!isUnferth){
+        // Wulfgar: spear
+        ctx.strokeStyle='#aaaaaa';ctx.lineWidth=1;
+        ctx.beginPath();ctx.moveTo(px-7,py-5);ctx.lineTo(px-7,py-14);ctx.stroke();
+        ctx.fillStyle='#cccccc';
+        ctx.beginPath();ctx.moveTo(px-7,py-14);ctx.lineTo(px-9,py-12);ctx.lineTo(px-5,py-12);ctx.closePath();ctx.fill();
+      } else {
+        // Unferth: sword (shorter)
+        ctx.strokeStyle='#aaaaaa';ctx.lineWidth=1;
+        ctx.beginPath();ctx.moveTo(px+6,py-5);ctx.lineTo(px+6,py-10);ctx.stroke();
+      }
+    },
+    extra:function(px,py,d,f,fac){
+      // Helmet
+      ctx.fillStyle= isUnferth ? '#cc7799' : '#cc4444';
+      ctx.beginPath();
+      ctx.arc(px+fac, py-9, 4, Math.PI, 0);
+      ctx.fill();
+      // Nose guard
+      ctx.strokeStyle=isUnferth?'#cc7799':'#cc4444';ctx.lineWidth=1;
+      ctx.beginPath();ctx.moveTo(px+fac,py-9);ctx.lineTo(px+fac,py-7);ctx.stroke();
+    }
+  });
+}
+
+// Frightened ghost (universal)
+function drawFrightened(x,y,dir,frame){
+  const flash=frightenTimer<120 && Math.floor(frame/8)%2;
+  const c=flash?'#ffffff':'#2222aa';
+  drawHumanoid(x,y,dir,frame,{
+    headColor:c,bodyColor:c,legColor:c,armColor:c,
+    headR:3,bodyW:6,bodyH:5,
+    extra:function(px,py){
+      ctx.fillStyle=flash?'#2222aa':'#ffffff';
+      ctx.fillRect(px-2,py-8,1,1);ctx.fillRect(px+1,py-8,1,1);
+      // Wavy mouth
+      ctx.strokeStyle=flash?'#2222aa':'#ffffff';ctx.lineWidth=1;
+      ctx.beginPath();ctx.moveTo(px-3,py-5);
+      for(let i=1;i<=4;i++) ctx.lineTo(px-3+i*1.5, py-5+((i%2)?-1:0));
+      ctx.stroke();
+    }
+  });
+}
+
+// Eyes only (eaten ghost returning)
+function drawGhostEyes(x,y,dir){
+  const lx=DX[dir]*2, ly=DY[dir]*2;
+  for(let s=-1;s<=1;s+=2){
+    ctx.fillStyle='#ffffff';
+    ctx.beginPath();ctx.ellipse(x+s*3,y-3,3,4,0,0,Math.PI*2);ctx.fill();
+    ctx.fillStyle='#000088';
+    ctx.beginPath();ctx.arc(x+s*3+lx,y-3+ly,1.5,0,Math.PI*2);ctx.fill();
+  }
+}
+
+// Dispatch ghost drawing
+function drawGhost(g,frame){
+  if(g.name==='B\u0113owulf') drawBeowulf(g,frame);
+  else if(g.name==='Hr\u014D\u00F0g\u0101r') drawHrothgar(g,frame);
+  else if(g.name==='W\u0113alh\u00FE\u0113ow') drawWealtheow(g,frame);
+  else drawWarrior(g,frame);
+}
+
+function drawHUD(){
+  hudLeft.textContent='W\u00E6lfyll: '+score;
+  hudCenter.textContent=isMotherLevel()?'Fitt: II (M\u014Ddor)':'Fitt: I (Grendel)';
+  // Arms display
+  let armStr='Earmas: ';
+  for(let i=0;i<arms;i++) armStr+='\u1405 '; // arm-like symbol
+  if(arms===0) armStr+='(n\u0101n!)';
+  hudRight.textContent=armStr;
+  messageBar.textContent=msgTimer>0?msgText:'';
+}
+
+function drawCoinFlip(){
+  if(coinFlipTimer<=0) return;
+  const a=Math.min(coinFlipTimer/30,1);
+  ctx.globalAlpha=a;ctx.font='bold 14px Georgia';ctx.textAlign='center';
+  if(coinFlipResult==='win'){ctx.fillStyle='#00ff66';ctx.fillText('\u2694 Won!',player.x,player.y-20);}
+  else{ctx.fillStyle='#ff4444';ctx.fillText('\u2620 Lost!',player.x,player.y-20);}
+  ctx.globalAlpha=1;
+}
+
+// --- Screens ---
+function drawTitleScreen(frame){
+  ctx.fillStyle='#050505';ctx.fillRect(0,0,W,H);
+
+  const gr=ctx.createRadialGradient(W/2,H*0.30,10,W/2,H*0.30,200);
+  gr.addColorStop(0,'rgba(0,60,0,0.12)');gr.addColorStop(1,'rgba(0,0,0,0)');
+  ctx.fillStyle=gr;ctx.fillRect(0,0,W,H);
+
+  ctx.textAlign='center';
+  ctx.fillStyle='#d4a017';ctx.shadowBlur=25;ctx.shadowColor='#d4a017';
+  ctx.font='bold 36px Georgia';ctx.fillText('GRENDLES',W/2,H*0.14);
+  ctx.font='bold 40px Georgia';ctx.fillText('MU\u00D0BONA',W/2,H*0.22);
+  ctx.shadowBlur=0;
+  ctx.fillStyle='#8a7a3a';ctx.font='italic 14px Georgia';
+  ctx.fillText('The Mouth-Slayer of Heorot',W/2,H*0.27);
+
+  // Draw preview Grendel figure
+  const gx=W/2, gy=H*0.34;
+  // Simple preview: green figure with two arms out
+  ctx.fillStyle='rgba(0,80,0,0.3)';ctx.shadowBlur=12;ctx.shadowColor='rgba(0,120,0,0.4)';
+  ctx.beginPath();ctx.arc(gx,gy,14,0,Math.PI*2);ctx.fill();ctx.shadowBlur=0;
+  ctx.fillStyle='#2a8a2a';
+  ctx.beginPath();ctx.arc(gx,gy-6,5,0,Math.PI*2);ctx.fill(); // head
+  ctx.fillStyle='#1a5a1a';ctx.fillRect(gx-5,gy-1,10,8); // body
+  ctx.fillStyle='#0a3a0a';ctx.fillRect(gx-3,gy+7,2,5);ctx.fillRect(gx+1,gy+7,2,5); // legs
+  // Arms swinging
+  const sw=Math.sin(frame*0.08)*4;
+  ctx.strokeStyle='#2a8a2a';ctx.lineWidth=3;ctx.lineCap='round';
+  ctx.beginPath();ctx.moveTo(gx-5,gy+1);ctx.lineTo(gx-12,gy+1+sw);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(gx+5,gy+1);ctx.lineTo(gx+12,gy+1-sw);ctx.stroke();
+  ctx.lineWidth=1;ctx.lineCap='butt';
+  // Eyes
+  ctx.fillStyle='#00ff00';ctx.shadowBlur=6;ctx.shadowColor='#00ff00';
+  ctx.fillRect(gx-3,gy-8,2,2);ctx.fillRect(gx+1,gy-8,2,2);ctx.shadowBlur=0;
+
+  // Dots leading to Grendel
+  for(let i=0;i<6;i++){
+    const dx2=gx+22+i*12;
+    const pulse=(frame+i*5)%30<20?1:0.3;
+    ctx.fillStyle='rgba(212,160,23,'+pulse+')';
+    ctx.beginPath();ctx.arc(dx2,gy,2.5,0,Math.PI*2);ctx.fill();
+  }
+
+  // Character legend
+  const ly=H*0.44;
+  const items=[
+    ['B\u0113owulf','#4488ff','The Hero \u2014 rips your arms off'],
+    ['Wulfg\u0101r','#ff4444','The Herald \u2014 ambushes'],
+    ['Unfer\u00F0','#ff88cc','The Skeptic \u2014 50/50 each encounter'],
+    ['Hr\u014D\u00F0g\u0101r','#aaaaaa','The Old King \u2014 slow, flees, high value'],
+    ['W\u0113alh\u00FE\u0113ow','#ddaa44','The Queen \u2014 tames you (slows)'],
+  ];
+  ctx.font='11px Georgia';
+  items.forEach((it,i)=>{
+    const lx2=W*0.10, ry=ly+i*20;
+    ctx.fillStyle=it[1];ctx.textAlign='left';
+    ctx.fillText('\u2022 '+it[0],lx2,ry+2);
+    ctx.fillStyle='#666';ctx.fillText(it[2],lx2+75,ry+2);
+  });
+
+  // Special victims
+  const vy=ly+items.length*20+12;
+  ctx.fillStyle='#ffb428';ctx.textAlign='left';
+  ctx.fillText('\u2022 Hondsc\u012Bo & \u00C6schere',W*0.10,vy+2);
+  ctx.fillStyle='#666';
+  ctx.fillText('Tastiest victims \u2014 200 pts',W*0.10+140,vy+2);
+
+  // Game rules
+  const ry2=vy+22;
+  ctx.fillStyle='#888';ctx.font='bold 11px Georgia';ctx.textAlign='center';
+  ctx.fillText('RULES',W/2,ry2);
+  ctx.font='11px Georgia';ctx.fillStyle='#666';
+  ctx.fillText('Grendel has 2 arms. B\u0113owulf rips one off per hit.',W/2,ry2+14);
+  ctx.fillText('Lose both arms = game over.',W/2,ry2+26);
+  ctx.fillText('Level 2: play as Grendles M\u014Ddor \u2014 avenge your son!',W/2,ry2+38);
+
+  // Controls
+  ctx.fillStyle='#888';ctx.font='bold 12px Georgia';
+  ctx.fillText('Arrow Keys / WASD \u2014 move    P \u2014 pause',W/2,H*0.89);
+
+  ctx.fillStyle='#8a7a3a';ctx.font='14px Georgia';
+  ctx.fillText('High Score: '+highScore,W/2,H*0.93);
+
+  if(Math.floor(frame/35)%2){
+    ctx.fillStyle='#d4a017';ctx.font='18px Georgia';
+    ctx.fillText('Press ENTER to begin',W/2,H*0.98);
+  }
+}
+
+function drawIntroScreen(frame){
+  ctx.fillStyle='#050505';ctx.fillRect(0,0,W,H);
+  const gr=ctx.createRadialGradient(W/2,H*0.45,20,W/2,H*0.45,250);
+  gr.addColorStop(0,'rgba(120,80,0,0.06)');gr.addColorStop(1,'rgba(0,0,0,0)');
+  ctx.fillStyle=gr;ctx.fillRect(0,0,W,H);
+
+  ctx.textAlign='center';
+  ctx.fillStyle='#d4a017';ctx.font='bold 20px Georgia';
+  ctx.fillText('From the Lay of Beowulf',W/2,H*0.10);
+  ctx.fillStyle='#6a5a2a';ctx.font='12px Georgia';
+  ctx.fillText('lines 740\u2013745a',W/2,H*0.14);
+
+  const oe=[
+    '\u00DEa com of m\u014Dre    under misthleo\u00F0um',
+    'Grendel gongan,    Godes yrre b\u00E6r;',
+    'mynte se m\u0101nsca\u00F0a    manna cynnes',
+    'sumne besyrwan    in sele \u00F0\u0101m h\u0113an.',
+  ];
+  const en=[
+    'Then came from the moor, under misty cliffs,',
+    'Grendel walking, bearing God\'s anger;',
+    'the evil ravager meant to ensnare',
+    'some of mankind in that high hall.',
+  ];
+  ctx.font='italic 15px Georgia';
+  oe.forEach((l,i)=>{ctx.fillStyle='#c49a17';ctx.fillText(l,W/2,H*0.22+i*26);});
+  ctx.font='13px Georgia';
+  en.forEach((l,i)=>{ctx.fillStyle='#777';ctx.fillText(l,W/2,H*0.22+oe.length*26+16+i*22);});
+
+  ctx.strokeStyle='#3a2a0a';ctx.lineWidth=1;
+  ctx.beginPath();ctx.moveTo(W*0.2,H*0.62);ctx.lineTo(W*0.8,H*0.62);ctx.stroke();
+
+  ctx.fillStyle='#8a7a3a';ctx.font='italic 13px Georgia';
+  ctx.fillText('You are Grendel, the night-stalker, the mu\u00F0bona.',W/2,H*0.67);
+  ctx.fillText('Devour the sleeping Geats. Seize the gl\u014Df to frighten warriors.',W/2,H*0.71);
+  ctx.fillStyle='#aa4444';ctx.font='bold italic 13px Georgia';
+  ctx.fillText('Beware B\u0113owulf \u2014 he rips your arms off!',W/2,H*0.76);
+  ctx.fillStyle='#8a7a3a';ctx.font='italic 13px Georgia';
+  ctx.fillText('Unfer\u00F0 is a coin-flip. W\u0113alh\u00FE\u0113ow tames you.',W/2,H*0.80);
+  ctx.fillText('Hr\u014D\u00F0g\u0101r is slow prey. Hondsc\u012Bo & \u00C6schere are the tastiest.',W/2,H*0.84);
+
+  ctx.fillStyle='#666';ctx.font='12px Georgia';
+  ctx.fillText('Arrow Keys or WASD to move \u2022 P to pause',W/2,H*0.90);
+
+  if(Math.floor(frame/35)%2){
+    ctx.fillStyle='#d4a017';ctx.font='18px Georgia';
+    ctx.fillText('Press ENTER to play',W/2,H*0.96);
+  }
+}
+
+function drawReadyScreen(frame){
+  ctx.fillStyle='rgba(0,0,0,0.5)';ctx.fillRect(0,0,W,H);
+  ctx.textAlign='center';
+  ctx.fillStyle='#d4a017';ctx.shadowBlur=10;ctx.shadowColor='#d4a017';
+  ctx.font='bold 24px Georgia';
+  ctx.fillText('GEARO!',W/2,H/2-20);
+  ctx.shadowBlur=0;
+  ctx.fillStyle='#8a7a3a';ctx.font='14px Georgia';
+  ctx.fillText('Press a direction key to begin',W/2,H/2+5);
+  ctx.fillStyle='#555';ctx.font='20px Georgia';
+  ctx.fillText('\u2190 \u2191 \u2193 \u2192',W/2,H/2+28);
+  ctx.font='11px Georgia';ctx.fillText('or W A S D',W/2,H/2+42);
+}
+
+function drawTransition(frame){
+  ctx.fillStyle='#050505';ctx.fillRect(0,0,W,H);
+
+  // Underwater/mere glow for mother level
+  const gr=ctx.createRadialGradient(W/2,H*0.4,20,W/2,H*0.4,200);
+  gr.addColorStop(0,'rgba(0,40,60,0.15)');gr.addColorStop(1,'rgba(0,0,0,0)');
+  ctx.fillStyle=gr;ctx.fillRect(0,0,W,H);
+
+  ctx.textAlign='center';
+  ctx.fillStyle='#44aa66';ctx.shadowBlur=20;ctx.shadowColor='#44aa66';
+  ctx.font='bold 28px Georgia';
+  ctx.fillText('GRENDLES M\u014CDOR',W/2,H*0.25);
+  ctx.shadowBlur=0;
+
+  ctx.fillStyle='#8a7a3a';ctx.font='italic 16px Georgia';
+  ctx.fillText('Grendel is fallen. His mother rises.',W/2,H*0.35);
+  ctx.fillText('She comes to Heorot to avenge her son.',W/2,H*0.40);
+
+  // OE quote
+  ctx.fillStyle='#c49a17';ctx.font='italic 14px Georgia';
+  ctx.fillText('Grendles m\u014Ddor, ides, \u0101gl\u01E3cwif,',W/2,H*0.50);
+  ctx.fillText('yrmpe gem\u016Bnde...',W/2,H*0.54);
+
+  ctx.fillStyle='#777';ctx.font='13px Georgia';
+  ctx.fillText('"Grendel\'s mother, a woman, a monster-wife,',W/2,H*0.60);
+  ctx.fillText('remembered her misery..."',W/2,H*0.64);
+
+  // Preview mother figure
+  const gx=W/2, gy=H*0.75;
+  ctx.fillStyle='rgba(0,60,0,0.3)';ctx.shadowBlur=12;ctx.shadowColor='rgba(0,100,0,0.4)';
+  ctx.beginPath();ctx.arc(gx,gy,14,0,Math.PI*2);ctx.fill();ctx.shadowBlur=0;
+  ctx.fillStyle='#1a5a2a';
+  ctx.beginPath();ctx.arc(gx,gy-6,5,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle='#0a3a1a';ctx.fillRect(gx-5,gy-1,10,8);
+  // Hair
+  ctx.strokeStyle='#0a2a0a';ctx.lineWidth=1;
+  for(let i=-2;i<=2;i++){
+    ctx.beginPath();ctx.moveTo(gx+i,gy-11);
+    ctx.quadraticCurveTo(gx+i*2,gy-4,gx+i*2.5,gy+2);ctx.stroke();
+  }
+  // Eyes
+  ctx.fillStyle='#00ff00';ctx.shadowBlur=6;ctx.shadowColor='#00ff00';
+  ctx.fillRect(gx-3,gy-8,2,2);ctx.fillRect(gx+1,gy-8,2,2);ctx.shadowBlur=0;
+
+  if(stateTimer>90 && Math.floor(frame/35)%2){
+    ctx.fillStyle='#d4a017';ctx.font='18px Georgia';
+    ctx.fillText('Press ENTER to continue',W/2,H*0.90);
+  }
+}
+
+function drawGameOver(frame){
+  ctx.fillStyle='rgba(0,0,0,0.85)';ctx.fillRect(0,0,W,H);
+  ctx.textAlign='center';
+  ctx.fillStyle='#aa0000';ctx.shadowBlur=20;ctx.shadowColor='#aa0000';
+  ctx.font='bold 32px Georgia';ctx.fillText('GAME OVER',W/2,H*0.22);ctx.shadowBlur=0;
+  ctx.fillStyle='#d4a017';ctx.font='italic 17px Georgia';
+  ctx.fillText('B\u0113owulf h\u00E6fde Grendles hand!',W/2,H*0.32);
+  ctx.fillStyle='#888';ctx.font='13px Georgia';
+  ctx.fillText('"Beowulf had Grendel\'s hand \u2014',W/2,H*0.39);
+  ctx.fillText('he tore the arm from the shoulder-joint..."',W/2,H*0.43);
+
+  // Draw armless Grendel
+  const gx=W/2, gy=H*0.55;
+  ctx.fillStyle='#2a8a2a';
+  ctx.beginPath();ctx.arc(gx,gy-6,5,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle='#1a5a1a';ctx.fillRect(gx-5,gy-1,10,8);
+  ctx.fillStyle='#0a3a0a';ctx.fillRect(gx-3,gy+7,2,5);ctx.fillRect(gx+1,gy+7,2,5);
+  // Stumps
+  ctx.strokeStyle='#660000';ctx.lineWidth=2;
+  ctx.beginPath();ctx.moveTo(gx-5,gy+1);ctx.lineTo(gx-7,gy+1);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(gx+5,gy+1);ctx.lineTo(gx+7,gy+1);ctx.stroke();
+  ctx.fillStyle='#880000';ctx.fillRect(gx-8,gy+2,1,3);ctx.fillRect(gx+7,gy+2,1,3);
+  ctx.lineWidth=1;
+  // Dim eyes
+  ctx.fillStyle='#004400';ctx.fillRect(gx-3,gy-8,2,2);ctx.fillRect(gx+1,gy-8,2,2);
+
+  ctx.fillStyle='#d4a017';ctx.font='22px Georgia';
+  ctx.fillText('W\u00E6lfyll: '+score,W/2,H*0.70);
+  ctx.fillStyle='#8a7a3a';ctx.font='14px Georgia';
+  ctx.fillText('Fitt reached: '+(isMotherLevel()?'II':'I')+' (level '+level+')',W/2,H*0.76);
+  if(score>=highScore&&score>0){
+    ctx.fillStyle='#ffcc00';ctx.shadowBlur=10;ctx.shadowColor='#ffcc00';
+    ctx.font='bold 16px Georgia';ctx.fillText('New High Score!',W/2,H*0.82);ctx.shadowBlur=0;
+  } else {
+    ctx.fillStyle='#666';ctx.font='14px Georgia';ctx.fillText('High Score: '+highScore,W/2,H*0.82);
+  }
+  if(stateTimer>60&&Math.floor(frame/35)%2){
+    ctx.fillStyle='#888';ctx.font='16px Georgia';ctx.fillText('Press ENTER to continue',W/2,H*0.92);
+  }
+}
+
+function drawDying(){
+  const t=Math.min(stateTimer/80,1);
+  const x=player.x, y=player.y;
+  // Grendel collapses
+  ctx.fillStyle='rgba(42,138,42,'+(1-t)+')';
+  ctx.beginPath();ctx.arc(x,y-4,8*(1-t),0,Math.PI*2);ctx.fill();
+  ctx.fillStyle='rgba(180,0,0,'+(0.4*Math.sin(t*Math.PI))+')';
+  ctx.beginPath();ctx.arc(x,y-4,12*t,0,Math.PI*2);ctx.fill();
+}
+
+function drawPaused(){
+  ctx.fillStyle='rgba(0,0,0,0.7)';ctx.fillRect(0,0,W,H);
+  ctx.textAlign='center';ctx.fillStyle='#d4a017';ctx.font='bold 28px Georgia';
+  ctx.fillText('PAUSED',W/2,H/2-5);
+  ctx.fillStyle='#8a7a3a';ctx.font='15px Georgia';
+  ctx.fillText('Press P to resume',W/2,H/2+25);
+}
+
+// --- Main Loop ---
+let frameCount=0;
+function gameLoop(){
+  frameCount++;
+  ctx.clearRect(0,0,W,H);ctx.fillStyle='#0a0a0a';ctx.fillRect(0,0,W,H);
+
+  switch(state){
+    case S_TITLE: drawTitleScreen(frameCount); break;
+    case S_INTRO: drawIntroScreen(frameCount); break;
+    case S_READY:
+      update(); drawMaze(frameCount); drawPlayer(frameCount);
+      ghosts.forEach(g=>drawGhost(g,frameCount)); drawHUD(); drawReadyScreen(frameCount); break;
+    case S_PLAY:
+      update(); drawMaze(frameCount); drawPlayer(frameCount);
+      ghosts.forEach(g=>drawGhost(g,frameCount)); drawCoinFlip(); drawHUD(); break;
+    case S_DYING:
+      update(); drawMaze(frameCount); drawDying();
+      ghosts.forEach(g=>drawGhost(g,frameCount)); drawHUD(); break;
+    case S_LEVEL_DONE:
+      update(); drawMaze(frameCount); drawPlayer(frameCount);
+      ghosts.forEach(g=>drawGhost(g,frameCount)); drawHUD();
+      if(Math.floor(frameCount/12)%2){ctx.fillStyle='rgba(212,160,23,0.06)';ctx.fillRect(0,0,W,H);}
+      break;
+    case S_GAMEOVER: update(); drawMaze(frameCount); drawGameOver(frameCount); break;
+    case S_PAUSED:
+      drawMaze(frameCount); drawPlayer(frameCount);
+      ghosts.forEach(g=>drawGhost(g,frameCount)); drawHUD(); drawPaused(); break;
+    case S_TRANSITION: update(); drawTransition(frameCount); break;
+  }
+  requestAnimationFrame(gameLoop);
+}
+requestAnimationFrame(gameLoop);
+
+})();
+</script>
+</body>
+</html>
