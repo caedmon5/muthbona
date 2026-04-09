@@ -204,6 +204,7 @@ let frightenTimer=0;
 const FRIGHTEN_DUR = 360;
 let coinFlipResult=null, coinFlipTimer=0;
 let tamedTimer = 0; // Wealtheow taming effect
+let invulnTimer = 0; // brief invulnerability after losing an arm
 
 function isMotherLevel() { return level % 2 === 0; }
 
@@ -417,7 +418,7 @@ function startGame(){
 function startLevel(){
   loadMaze(); dotsLeft=countDots();
   modeIndex=0; modeTimer=0; frightenTimer=0;
-  coinFlipResult=null; coinFlipTimer=0; tamedTimer=0;
+  coinFlipResult=null; coinFlipTimer=0; tamedTimer=0; invulnTimer=0;
 
   player=new Entity(START_COL,START_ROW,playerSpeed());
   player.dir=2; player.nextDir=-1;
@@ -474,12 +475,14 @@ function checkCollisions(){
   }
 
   // Ghost collisions
+  if(invulnTimer>0) return; // invulnerable after arm rip — no ghost checks
+
   for(let i=0;i<ghosts.length;i++){
     const g=ghosts[i];
     if(g.inHouse||g.eaten) continue;
     if(Math.abs(player.x-g.x)<TILE*0.65 && Math.abs(player.y-g.y)<TILE*0.65){
 
-      // BEOWULF: rips an arm off
+      // BEOWULF: rips an arm off — you keep going
       if(g.name==='B\u0113owulf'){
         arms--;
         sndArmRip();
@@ -487,13 +490,12 @@ function checkCollisions(){
           state=S_DYING; stateTimer=0;
           setMessage("B\u0113owulf h\u00E6fde Grendles hand! \u2014 Both arms torn!");
           return;
-        } else {
-          // Lose an arm but survive — brief invulnerability via reset
-          setMessage("Earm \u0101sliten! \u2014 Arm ripped off!");
-          resetPositions();
-          state=S_READY; stateTimer=0;
-          return;
         }
+        setMessage("Earm \u0101sliten! \u2014 Arm ripped off!");
+        invulnTimer=120; // 2 seconds of invulnerability
+        // Beowulf bounces back to ghost house after ripping
+        g.eaten=true; g.speed=3.5;
+        continue;
       }
 
       // UNFERTH: 50/50
@@ -506,11 +508,12 @@ function checkCollisions(){
           coinFlipResult='win'; coinFlipTimer=90;
         } else {
           arms--;
-          sndArmRip();
           if(arms<=0){state=S_DYING;stateTimer=0;setMessage("Unfer\u00F0 earm \u0101slat!");return;}
+          sndArmRip();
           setMessage("Unfer\u00F0 wi\u00F0st\u014Dd! \u2014 Arm lost!");
           coinFlipResult='lose'; coinFlipTimer=90;
-          resetPositions(); state=S_READY; stateTimer=0; return;
+          invulnTimer=120;
+          g.eaten=true; g.speed=3.5;
         }
         continue;
       }
@@ -521,7 +524,6 @@ function checkCollisions(){
         player.speed = 0.8;
         sndTame();
         setMessage("W\u0113alh\u00FE\u0113ow getemode \u00FE\u0113 \u2014 The queen tames you!");
-        // Wealtheow retreats after taming
         g.eaten=true; g.speed=3.5;
         continue;
       }
@@ -539,7 +541,8 @@ function checkCollisions(){
         sndArmRip();
         if(arms<=0){state=S_DYING;stateTimer=0;setMessage(g.name+" sl\u014Dg Grendel!");return;}
         setMessage("Earm \u0101sliten!");
-        resetPositions(); state=S_READY; stateTimer=0; return;
+        invulnTimer=120;
+        g.eaten=true; g.speed=3.5;
       }
     }
   }
@@ -557,6 +560,9 @@ function update(){
   }
 
   if(state===S_PLAY){
+    // Invulnerability timer
+    if(invulnTimer>0) invulnTimer--;
+
     // Tame timer
     if(tamedTimer>0){
       tamedTimer--;
@@ -708,6 +714,9 @@ function drawHumanoid(x,y,dir,frame,opts){
 
 // --- GRENDEL sprite ---
 function drawPlayer(frame){
+  // Flash when invulnerable — skip drawing every other 4 frames
+  if(invulnTimer>0 && Math.floor(frame/4)%2) return;
+
   const x=player.x, y=player.y;
   const dir=player.dir;
   const isMother=isMotherLevel();
