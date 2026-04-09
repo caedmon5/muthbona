@@ -1,4 +1,4 @@
-# Grendles Muðbona
+# Grendel Muðbona
 
 **The Mouth-Slayer of Heorot** — a Pac-Man style arcade game set in the world of *Beowulf*, designed for advanced Old English classes.
 
