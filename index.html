@@ -669,34 +669,12 @@ function drawMaze(frame){
       if(v){ctx.fillStyle='rgba(255,200,80,'+(p*0.7)+')';ctx.font='8px Georgia';ctx.textAlign='center';ctx.fillText(v.name,cx2,cy2+13);}
     } else if(t===3){
       const p=0.6+0.4*Math.sin(frame*0.06);
-      const gx=x+TILE/2, gy=y+TILE/2;
-      ctx.shadowBlur=12;ctx.shadowColor='#66ff66';
-      ctx.fillStyle='rgba(100,255,100,'+p+')';
-      // Glove palm
-      ctx.beginPath();
-      ctx.moveTo(gx-3,gy-2);
-      ctx.lineTo(gx+3,gy-2);
-      ctx.lineTo(gx+4,gy+4);
-      ctx.lineTo(gx-4,gy+4);
-      ctx.closePath();
-      ctx.fill();
-      // Thumb (sticking out left)
-      ctx.beginPath();
-      ctx.moveTo(gx-3,gy);
-      ctx.lineTo(gx-6,gy-2);
-      ctx.lineTo(gx-5,gy+1);
-      ctx.closePath();
-      ctx.fill();
-      // Four fingers
-      ctx.fillStyle='rgba(130,255,130,'+p+')';
-      for(let f=0;f<4;f++){
-        const fx=gx-3+f*2;
-        ctx.fillRect(fx,gy-5-Math.abs(f-1.5)*0.8, 1.5, 3);
-      }
-      // Cuff
-      ctx.fillStyle='rgba(80,200,80,'+p+')';
-      ctx.fillRect(gx-4,gy+4,8,2);
-      ctx.shadowBlur=0;
+      const gx=x+TILE/2, gy=y+TILE/2+2;
+      ctx.shadowBlur=14;ctx.shadowColor='rgba(100,255,100,'+p+')';
+      ctx.font='16px serif';ctx.textAlign='center';ctx.textBaseline='middle';
+      ctx.globalAlpha=p;
+      ctx.fillText('\uD83E\uDDE4',gx,gy);
+      ctx.globalAlpha=1;ctx.shadowBlur=0;ctx.textBaseline='alphabetic';
     } else if(t===4){
       ctx.fillStyle='#997722';ctx.fillRect(x+2,y+TILE/2-2,TILE-4,4);
     }
