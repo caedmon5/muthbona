@@ -636,14 +636,37 @@ function drawMaze(frame){
     } else if(t===6){
       const p=0.7+0.3*Math.sin(frame*0.05);
       const cx2=x+TILE/2, cy2=y+TILE/2;
-      ctx.shadowBlur=15;ctx.shadowColor='rgba(255,180,40,0.6)';
-      ctx.fillStyle='rgba(255,180,40,'+p+')';
-      // Sleeping warrior shape
-      ctx.beginPath();ctx.ellipse(cx2,cy2,7,5,0,0,Math.PI*2);ctx.fill();
-      ctx.beginPath();ctx.arc(cx2-5,cy2-2,3,0,Math.PI*2);ctx.fill();
-      ctx.shadowBlur=0;
+      const ac='rgba(255,180,40,'+p+')';
+      const ac2='rgba(220,150,30,'+p+')';
+      ctx.shadowBlur=12;ctx.shadowColor='rgba(255,180,40,0.5)';
+      // Sleeping humanoid lying on side
+      // Head (on right, resting)
+      ctx.fillStyle='rgba(230,180,130,'+p+')'; // skin tone
+      ctx.beginPath();ctx.arc(cx2+5,cy2-2,3,0,Math.PI*2);ctx.fill();
+      // Closed eyes (z's)
+      ctx.fillStyle='rgba(255,220,100,'+(p*0.6)+')';
+      ctx.font='6px Georgia';ctx.textAlign='center';
+      ctx.fillText('z',cx2+9,cy2-5);
+      ctx.font='7px Georgia';
+      ctx.fillText('z',cx2+12,cy2-8);
+      // Body (lying horizontal)
+      ctx.fillStyle=ac;
+      ctx.fillRect(cx2-5,cy2-3,10,5);
+      // Legs (bent, sleeping)
+      ctx.fillStyle=ac2;
+      ctx.fillRect(cx2-8,cy2-1,4,3);
+      ctx.fillRect(cx2-9,cy2+1,3,2);
+      // Arms tucked
+      ctx.fillStyle='rgba(230,180,130,'+p+')';
+      ctx.fillRect(cx2+2,cy2+1,3,2);
+      // Blanket/cloak detail
+      ctx.strokeStyle='rgba(180,130,30,'+(p*0.5)+')';ctx.lineWidth=0.5;
+      ctx.beginPath();ctx.moveTo(cx2-5,cy2-3);ctx.lineTo(cx2+5,cy2-3);ctx.stroke();
+      ctx.beginPath();ctx.moveTo(cx2-5,cy2+2);ctx.lineTo(cx2+5,cy2+2);ctx.stroke();
+      ctx.shadowBlur=0;ctx.lineWidth=1;
+      // Name label
       const v=SPECIAL_VICTIMS[c+','+r];
-      if(v){ctx.fillStyle='rgba(255,200,80,'+(p*0.7)+')';ctx.font='8px Georgia';ctx.textAlign='center';ctx.fillText(v.name,cx2,cy2+14);}
+      if(v){ctx.fillStyle='rgba(255,200,80,'+(p*0.7)+')';ctx.font='8px Georgia';ctx.textAlign='center';ctx.fillText(v.name,cx2,cy2+13);}
     } else if(t===3){
       const p=0.6+0.4*Math.sin(frame*0.06);
       ctx.fillStyle='rgba(100,255,100,'+p+')';ctx.shadowBlur=12;ctx.shadowColor='#66ff66';
